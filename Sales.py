@@ -1261,55 +1261,77 @@ with tab3:
 
     # ==================== قراءة ملف الإيميلات بغض النظر عن ترتيب الأعمدة ====================
     if st.session_state.email_file is not None:
-        email_df = pd.read_excel(st.session_state.email_file)
+        email_df_raw = pd.read_excel(st.session_state.email_file)
+        
+        # DEBUG: عرض معلومات الملف الخام
+        with st.expander("🔧 Debug: Raw Email File Info", expanded=False):
+            st.write("**Column Names:**", list(email_df_raw.columns))
+            st.write("**First 5 rows:**")
+            st.dataframe(email_df_raw.head(5))
         
         # إعادة تسمية الأعمدة للتأكد من الأسماء الصحيحة
         # البحث عن عمود Agent Code
         agent_code_col = None
-        for col in email_df.columns:
+        for col in email_df_raw.columns:
             if 'Agent Code' in col or 'agent code' in col.lower() or 'code' in col.lower():
                 agent_code_col = col
                 break
         
         # البحث عن عمود Email
         email_col = None
-        for col in email_df.columns:
+        for col in email_df_raw.columns:
             if 'Email' in col or 'email' in col.lower() or 'e-mail' in col.lower():
                 email_col = col
                 break
         
         # البحث عن عمود Manager Email
         manager_col = None
-        for col in email_df.columns:
+        for col in email_df_raw.columns:
             if 'Manager' in col or 'manager email' in col.lower():
                 manager_col = col
                 break
         
         # البحث عن عمود Agent Name
         name_col = None
-        for col in email_df.columns:
+        for col in email_df_raw.columns:
             if 'Agent Name' in col or 'agent name' in col.lower() or 'name' in col.lower():
                 name_col = col
                 break
         
         # البحث عن عمود Team Name (اختياري)
         team_col = None
-        for col in email_df.columns:
+        for col in email_df_raw.columns:
             if 'Team Name' in col or 'team name' in col.lower() or 'team' in col.lower():
                 team_col = col
                 break
         
-        # إعادة تسمية الأعمدة إلى الأسماء القياسية
+        # إنشاء DataFrame جديد بالأسماء القياسية
+        email_df = pd.DataFrame()
+        
         if agent_code_col:
-            email_df = email_df.rename(columns={agent_code_col: 'Agent Code'})
+            email_df['Agent Code'] = email_df_raw[agent_code_col].astype(str).str.strip()
+        else:
+            st.error("❌ Could not find Agent Code column in email file!")
+            st.stop()
+            
         if email_col:
-            email_df = email_df.rename(columns={email_col: 'Email'})
+            email_df['Email'] = email_df_raw[email_col]
+        else:
+            st.error("❌ Could not find Email column in email file!")
+            st.stop()
+            
         if manager_col:
-            email_df = email_df.rename(columns={manager_col: 'Manager Email'})
+            email_df['Manager Email'] = email_df_raw[manager_col]
+        else:
+            email_df['Manager Email'] = None
+            
         if name_col:
-            email_df = email_df.rename(columns={name_col: 'Agent Name'})
+            email_df['Agent Name'] = email_df_raw[name_col]
+        else:
+            email_df['Agent Name'] = email_df['Agent Code']
+            
         if team_col:
-            email_df = email_df.rename(columns={team_col: 'Team Name'})
+            email_df['Team Name'] = email_df_raw[team_col]
         
         # حفظ DataFrame المعدل في session state
         st.session_state.email_df_clean = email_df
@@ -1319,6 +1341,19 @@ with tab3:
         # عرض معاينة سريعة
         with st.expander("📊 معاينة ملف الإيميلات بعد المعالجة"):
             st.dataframe(email_df[['Agent Code', 'Agent Name', 'Email', 'Manager Email']].head(10))
+            
+        # DEBUG: البحث عن Marihan Mohamed
+        with st.expander("🔍 Debug: Search for Marihan Mohamed", expanded=False):
+            marihan_search = email_df[email_df['Agent Name'] == 'Marihan Mohamed Atef']
+            if not marihan_search.empty:
+                st.write("**Found row:**")
+                st.dataframe(marihan_search)
+                st.write(f"**Agent Code:** {marihan_search['Agent Code'].values[0]}")
+                st.write(f"**Email:** {marihan_search['Email'].values[0]}")
+            else:
+                st.error("❌ Marihan Mohamed Atef NOT FOUND in processed email file!")
+                st.write("Available Agent Names:", email_df['Agent Name'].tolist()[:10])
+                
     else:
         email_df = None
 
@@ -1336,8 +1371,10 @@ with tab3:
         additional_cc = st.text_input("Additional CC Emails (comma-separated)")
 
         if email_df is not None:
-            # تحديد عمود الإيميل (بعد إعادة التسمية أصبح 'Email')
-            email_column = 'Email'
+            # تأكد من اتساق أنواع البيانات مع results_df
+            if not st.session_state.results_df.empty:
+                st.session_state.results_df['Agent Code'] = st.session_state.results_df['Agent Code'].astype(str).str.strip()
+                email_df['Agent Code'] = email_df['Agent Code'].astype(str).str.strip()
 
             if email_type == "Individual Agents":
                 if not st.session_state.results_df.empty:
@@ -1412,6 +1449,8 @@ with tab3:
             missing_codes = sales_codes - email_codes
             if missing_codes:
                 st.warning(f"⚠️ {len(missing_codes)} Agent codes not found in email file: {list(missing_codes)[:5]}")
+                with st.expander("Show missing codes"):
+                    st.write(list(missing_codes))
             else:
                 st.success(f"✅ All {len(sales_codes)} agent codes matched!")
             
@@ -1508,7 +1547,8 @@ with tab3:
                     st.error("Upload email list file.")
                 else:
                     with st.spinner("Sending emails..."):
-                        agent_emails = email_df.set_index('Agent Code')['Email'].to_dict()
+                        # بناء قاموس الإيميلات
+                        agent_emails = dict(zip(email_df['Agent Code'].astype(str), email_df['Email']))
                         
                         # خريطة المديرين
                         manager_map = {}
@@ -1519,7 +1559,7 @@ with tab3:
                                 manager_map[agent_code] = manager
                         
                         output_dir = Path(tempfile.gettempdir()) / "PDF_Reports"
-                        filtered_df = st.session_state.results_df
+                        filtered_df = st.session_state.results_df.copy()
                         if achievement_filter > 0:
                             filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
                         
@@ -1552,7 +1592,7 @@ with tab3:
                                 recipient_email = manager_map.get(agent_code)
                             
                             if not recipient_email or not is_valid_email(recipient_email):
-                                errors.append(f"Invalid email for {agent_name} (Code: {agent_code})")
+                                errors.append(f"Invalid email for {agent_name} (Code: {agent_code}) - Email: {recipient_email}")
                                 failed += 1
                                 continue
                             
@@ -1699,11 +1739,11 @@ Sales Team"""
                                 failed += 1
                                 continue
                             
-                            filtered_df = st.session_state.results_df
+                            filtered_df = st.session_state.results_df.copy()
                             if achievement_filter > 0:
                                 filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
                             
-                            valid_agents = [a for a in team_agents if a in filtered_df['Agent Code'].values]
+                            valid_agents = [a for a in team_agents if a in filtered_df['Agent Code'].astype(str).values]
                             if not valid_agents:
                                 errors.append(f"No agents match achievement filter for: {manager_email}")
                                 failed += 1
@@ -1719,7 +1759,7 @@ Sales Team"""
                                 failed += 1
                                 continue
                             
-                            team_data = filtered_df[filtered_df['Agent Code'].isin(valid_agents)]
+                            team_data = filtered_df[filtered_df['Agent Code'].astype(str).isin(valid_agents)]
                             total_cards = team_data['Total Cards'].sum() if not team_data.empty else 0
                             total_year2 = team_data['2 Years Cards'].sum() if not team_data.empty else 0
                             total_year3 = team_data['3 Years Cards'].sum() if not team_data.empty else 0
@@ -1795,7 +1835,7 @@ Sales Team"""
                         pdf_path = generate_summary_report()
                         
                         if pdf_path:
-                            filtered_df = st.session_state.results_df
+                            filtered_df = st.session_state.results_df.copy()
                             if achievement_filter > 0:
                                 filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
                             
@@ -1852,7 +1892,7 @@ Sales Team"""
                                 st.error("❌ Failed to send summary report")
                         else:
                             st.error("❌ Failed to generate summary report")
-
+                            
 # Tab 4: Instructions
 with tab4:
     st.header("Instructions")
