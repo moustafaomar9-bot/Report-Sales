@@ -230,15 +230,13 @@ def add_goal_status_to_pdf(pdf, two_year_cards, target_2years, three_year_cards,
     progress_2y = min(100, (two_year_cards / target_2years * 100)) if target_2years > 0 else 0
     filled = int(bar_length * progress_2y / 100)
 
-    # ألوان مختلفة حسب النسبة
     if progress_2y >= 100:
-        pdf.set_fill_color(0, 150, 0)  # أخضر
+        pdf.set_fill_color(0, 150, 0)
     elif progress_2y >= 70:
-        pdf.set_fill_color(255, 200, 0)  # أصفر
+        pdf.set_fill_color(255, 200, 0)
     else:
-        pdf.set_fill_color(255, 100, 100)  # أحمر
+        pdf.set_fill_color(255, 100, 100)
 
-    # رسم الشريط
     pdf.rect(10, pdf.get_y(), bar_length, 5, 'F')
     pdf.set_fill_color(0, 150, 0)
     pdf.rect(10, pdf.get_y(), filled, 5, 'F')
@@ -676,7 +674,7 @@ def generate_individual_reports():
             pdf.cell(12, 5, str(int(remaining)), border=1, align="C")
             pdf.ln(3)
 
-                         # Create smaller chart to fit on one page - تقليل الطول وتحريكه لأسفل
+                        # Create smaller chart to fit on one page
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(3.2, 1.3), gridspec_kw={'width_ratios': [3, 1]})
             categories = ['Total', 'Sec', '1Yr', '2Yr', '3Yr']
             values = [total, second, year1, year2, year3]
@@ -708,7 +706,7 @@ def generate_individual_reports():
             plt.savefig(chart_path, dpi=100, bbox_inches='tight')
             plt.close()
 
-            pdf.ln(8)  # زيادة المسافة لتحريك الشارت لأسفل
+            pdf.ln(8)
             pdf.image(str(chart_path), x=10, y=None, w=70)
             os.remove(chart_path)
 
@@ -1140,7 +1138,7 @@ def generate_team_report(manager_email, agent_codes, sales_df, target_df, start_
         pdf.set_text_color(0, 0, 0)
         pdf.ln(3)
 
-                # Add team daily performance
+        # Add team daily performance
         days_worked = st.session_state.get('days_worked', st.session_state.days)
         total_daily_target_team = (agent_df['Target +10%'] / st.session_state.days).sum() if not agent_df.empty else 0
         expected_team_cards = total_daily_target_team * days_worked
@@ -1291,6 +1289,18 @@ with tab3:
 
     col1, col2, col3 = st.columns(3)
 
+        def is_valid_recipient(email, email_df, recipient_type='agent'):
+        if not email or pd.isna(email):
+            return False
+        email_str = str(email).strip()
+        if '@' not in email_str:
+            return False
+        if recipient_type == 'agent':
+            return email_str in email_df['Email'].values
+        elif recipient_type == 'manager':
+            return email_str in email_df['Manager Email'].values
+        return True
+
     with col1:
         if st.button("Send to Agents", use_container_width=True):
             if not st.session_state.sender_email or not st.session_state.email_password:
@@ -1300,35 +1310,57 @@ with tab3:
             else:
                 with st.spinner("Sending emails to agents..."):
                     email_df = pd.read_excel(st.session_state.email_file)
-                    emails = email_df.set_index('Agent Code')['Email'].to_dict()
+                    agent_emails = email_df.set_index('Agent Code')['Email'].to_dict()
                     output_dir = Path(tempfile.gettempdir()) / "PDF_Reports"
                     successful = 0
                     failed = 0
+                    errors = []
 
                     filtered_df = st.session_state.results_df
                     if achievement_filter > 0:
                         filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
 
-                    for _, row in filtered_df.iterrows():
-                        agent_code = row['Agent Code']
-                        agent_name = row['Agent Name']
-                        recipient_email = emails.get(agent_code)
+                    agents_to_send = []
+                    if selected_agent == "All":
+                        agents_to_send = filtered_df['Agent Name'].tolist()
+                    else:
+                        agents_to_send = [selected_agent]
 
-                        if recipient_email:
-                            pdf_path = output_dir / f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf"
-                            if pdf_path.exists():
-                                total_cards = row['Total Cards']
-                                achievement = row['Achievement']
-                                year2_cards = row['2 Years Cards']
-                                year3_cards = row['3 Years Cards']
-                                target_2y = row.get('Target 2Y', 0)
-                                target_3y = row.get('Target 3Y', 0)
-                                days_worked = st.session_state.get('days_worked', st.session_state.days)
-                                daily_target = row['Target +10%'] / st.session_state.days if st.session_state.days > 0 else 0
-                                expected_cards = daily_target * days_worked
-                                balance = total_cards - expected_cards
+                    cc_list = [email.strip() for email in additional_cc.split(',') if email.strip() and '@' in email.strip()] if additional_cc else []
 
-                                body = f"""Dear {agent_name},
+                    for agent_name in agents_to_send:
+                        agent_row = filtered_df[filtered_df['Agent Name'] == agent_name]
+                        if agent_row.empty:
+                            errors.append(f"Agent '{agent_name}' not found in filtered data")
+                            failed += 1
+                            continue
+
+                        agent_code = agent_row.iloc[0]['Agent Code']
+                        recipient_email = agent_emails.get(agent_code)
+
+                        if not is_valid_recipient(recipient_email, email_df, 'agent'):
+                            errors.append(f"Invalid or missing email for agent: {agent_name} (Code: {agent_code})")
+                            failed += 1
+                            continue
+
+                        pdf_path = output_dir / f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf"
+                        if not pdf_path.exists():
+                            errors.append(f"PDF not found for agent: {agent_name} (Code: {agent_code})")
+                            failed += 1
+                            continue
+
+                        total_cards = agent_row.iloc[0]['Total Cards']
+                        achievement = agent_row.iloc[0]['Achievement']
+                        year2_cards = agent_row.iloc[0]['2 Years Cards']
+                        year3_cards = agent_row.iloc[0]['3 Years Cards']
+                        target_2y = agent_row.iloc[0].get('Target 2Y', 0)
+                        target_3y = agent_row.iloc[0].get('Target 3Y', 0)
+                        days_worked = st.session_state.get('days_worked', st.session_state.days)
+                        daily_target = agent_row.iloc[0]['Target +10%'] / st.session_state.days if st.session_state.days > 0 else 0
+                        expected_cards = daily_target * days_worked
+                        balance = total_cards - expected_cards
+
+                        body = f"""Dear {agent_name},
 
 Please find attached your sales report from {st.session_state.start_date} to {st.session_state.end_date} based on {st.session_state.date_type}.
 
@@ -1343,29 +1375,28 @@ Summary:
 Best regards,
 Sales Team"""
 
-                                cc_list = [email.strip() for email in additional_cc.split(',') if email.strip()] if additional_cc else None
-
-                                if send_email(
-                                    st.session_state.sender_email,
-                                    st.session_state.email_password,
-                                    recipient_email,
-                                    pdf_path,
-                                    f"Individual Sales Report: {st.session_state.email_subject}",
-                                    body,
-                                    f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf",
-                                    cc_list
-                                ):
-                                    successful += 1
-                                else:
-                                    failed += 1
-                            else:
-                                st.warning(f"PDF not found for agent {agent_code}")
-                                failed += 1
+                        if send_email(
+                            st.session_state.sender_email,
+                            st.session_state.email_password,
+                            recipient_email,
+                            pdf_path,
+                            f"Individual Sales Report: {st.session_state.email_subject}",
+                            body,
+                            f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf",
+                            cc_list
+                        ):
+                            successful += 1
                         else:
-                            st.warning(f"No email found for agent {agent_code}")
                             failed += 1
+                            errors.append(f"Failed to send to {agent_name}")
 
-                    st.success(f"{successful} emails sent successfully! {failed} failed.")
+                    st.success(f"✅ {successful} emails sent successfully! ❌ {failed} failed.")
+                    if errors:
+                        with st.expander("Show errors details"):
+                            for err in errors[:10]:
+                                st.write(f"- {err}")
+                            if len(errors) > 10:
+                                st.write(f"... and {len(errors) - 10} more errors")
 
     with col2:
         if st.button("Send to Managers", use_container_width=True):
@@ -1387,35 +1418,70 @@ Sales Team"""
                         date_range_sales = sales_df[(sales_df[st.session_state.date_type] >= st.session_state.start_date) & 
                                                     (sales_df[st.session_state.date_type] <= st.session_state.end_date)]
 
+                        # بناء خريطة الفرق
+                        team_agents_map = {}
+                        for _, row in email_df.iterrows():
+                            manager = row['Manager Email']
+                            agent_code = str(row['Agent Code'])
+                            if pd.notna(manager):
+                                if manager not in team_agents_map:
+                                    team_agents_map[manager] = []
+                                team_agents_map[manager].append(agent_code)
+
                         managers_to_send = []
                         if selected_manager == "All":
-                            managers_to_send = email_df['Manager Email'].dropna().unique()
+                            managers_to_send = list(team_agents_map.keys())
                         else:
                             managers_to_send = [selected_manager]
 
                         successful = 0
                         failed = 0
+                        errors = []
+                        cc_list = [email.strip() for email in additional_cc.split(',') if email.strip() and '@' in email.strip()] if additional_cc else []
 
                         for manager_email in managers_to_send:
-                            team_agents = email_df[email_df['Manager Email'] == manager_email]['Agent Code'].astype(str).tolist()
+                            if not is_valid_recipient(manager_email, email_df, 'manager'):
+                                errors.append(f"Invalid manager email: {manager_email}")
+                                failed += 1
+                                continue
 
-                            if team_agents:
-                                pdf_path = generate_team_report(
-                                    manager_email, team_agents, date_range_sales, target_df,
-                                    st.session_state.start_date, st.session_state.end_date
-                                )
+                            team_agents = team_agents_map.get(manager_email, [])
+                            if not team_agents:
+                                errors.append(f"No agents found for manager: {manager_email}")
+                                failed += 1
+                                continue
 
-                                if pdf_path:
-                                    team_data = st.session_state.results_df[st.session_state.results_df['Agent Code'].isin(team_agents)]
-                                    total_team_cards = team_data['Total Cards'].sum() if not team_data.empty else 0
-                                    total_year2 = team_data['2 Years Cards'].sum() if not team_data.empty else 0
-                                    total_year3 = team_data['3 Years Cards'].sum() if not team_data.empty else 0
-                                    days_worked = st.session_state.get('days_worked', st.session_state.days)
-                                    total_daily_target = (team_data['Target +10%'] / st.session_state.days).sum() if not team_data.empty else 0
-                                    expected_cards = total_daily_target * days_worked
-                                    team_balance = total_team_cards - expected_cards
+                            # تصفية للوكلاء الذين حققوا الفلتر
+                            filtered_df = st.session_state.results_df
+                            if achievement_filter > 0:
+                                filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
 
-                                    body = f"""Dear Manager,
+                            valid_team_agents = [a for a in team_agents if a in filtered_df['Agent Code'].values]
+                            if not valid_team_agents:
+                                errors.append(f"No agents with achievement >= {achievement_filter}% for manager: {manager_email}")
+                                failed += 1
+                                continue
+
+                            pdf_path = generate_team_report(
+                                manager_email, valid_team_agents, date_range_sales, target_df,
+                                st.session_state.start_date, st.session_state.end_date
+                            )
+
+                            if not pdf_path:
+                                errors.append(f"Failed to generate team report for: {manager_email}")
+                                failed += 1
+                                continue
+
+                            team_data = filtered_df[filtered_df['Agent Code'].isin(valid_team_agents)]
+                            total_team_cards = team_data['Total Cards'].sum() if not team_data.empty else 0
+                            total_year2 = team_data['2 Years Cards'].sum() if not team_data.empty else 0
+                            total_year3 = team_data['3 Years Cards'].sum() if not team_data.empty else 0
+                            days_worked = st.session_state.get('days_worked', st.session_state.days)
+                            total_daily_target = (team_data['Target +10%'] / st.session_state.days).sum() if not team_data.empty else 0
+                            expected_cards = total_daily_target * days_worked
+                            team_balance = total_team_cards - expected_cards
+
+                            body = f"""Dear Team Leader,
 
 Please find attached the team sales report from {st.session_state.start_date} to {st.session_state.end_date} based on {st.session_state.date_type}.
 
@@ -1429,31 +1495,31 @@ Team Summary:
 Best regards,
 Sales Team"""
 
-                                    cc_list = [email.strip() for email in additional_cc.split(',') if email.strip()] if additional_cc else None
-
-                                    if send_email(
-                                        st.session_state.sender_email,
-                                        st.session_state.email_password,
-                                        manager_email,
-                                        pdf_path,
-                                        f"Team Sales Report: {st.session_state.email_subject}",
-                                        body,
-                                        pdf_path.name,
-                                        cc_list
-                                    ):
-                                        successful += 1
-                                    else:
-                                        failed += 1
-                                else:
-                                    failed += 1
+                            if send_email(
+                                st.session_state.sender_email,
+                                st.session_state.email_password,
+                                manager_email,
+                                pdf_path,
+                                f"Team Sales Report: {st.session_state.email_subject}",
+                                body,
+                                pdf_path.name,
+                                cc_list
+                            ):
+                                successful += 1
                             else:
-                                st.warning(f"No agents found for manager {manager_email}")
                                 failed += 1
+                                errors.append(f"Failed to send to manager: {manager_email}")
 
-                        st.success(f"{successful} emails sent to managers successfully! {failed} failed.")
+                        st.success(f"✅ {successful} emails sent to managers successfully! ❌ {failed} failed.")
+                        if errors:
+                            with st.expander("Show errors details"):
+                                for err in errors[:10]:
+                                    st.write(f"- {err}")
+                                if len(errors) > 10:
+                                    st.write(f"... and {len(errors) - 10} more errors")
 
     with col3:
-        if st.button("Send Summary", use_container_width=True):
+        if st.button("Send Summary Report", use_container_width=True):
             if not st.session_state.sender_email or not st.session_state.email_password:
                 st.error("Please configure sender email and password in sidebar.")
             elif not summary_recipient:
@@ -1463,29 +1529,24 @@ Sales Team"""
                     pdf_path = generate_summary_report()
 
                     if pdf_path:
-                        if not st.session_state.results_df.empty:
-                            total_cards = st.session_state.results_df['Total Cards'].sum()
-                            total_second = st.session_state.results_df['Second Cards'].sum()
-                            total_year1 = st.session_state.results_df['1 Year Cards'].sum()
-                            total_year2 = st.session_state.results_df['2 Years Cards'].sum()
-                            total_year3 = st.session_state.results_df['3 Years Cards'].sum()
-                            avg_achievement = st.session_state.results_df['Achievement'].mean()
-                            days_worked = st.session_state.get('days_worked', st.session_state.days)
-                            total_daily_target = (st.session_state.results_df['Target +10%'] / st.session_state.days).sum() if not st.session_state.results_df.empty else 0
-                            expected_cards = total_daily_target * days_worked
-                            summary_balance = total_cards - expected_cards
-                        else:
-                            total_cards = 0
-                            total_second = 0
-                            total_year1 = 0
-                            total_year2 = 0
-                            total_year3 = 0
-                            avg_achievement = 0
-                            days_worked = st.session_state.get('days_worked', st.session_state.days)
-                            expected_cards = 0
-                            summary_balance = 0
+                        filtered_df = st.session_state.results_df
+                        if achievement_filter > 0:
+                            filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
 
-                        body = f"""Dear Summary Report Recipient,
+                        total_cards = filtered_df['Total Cards'].sum() if not filtered_df.empty else 0
+                        total_second = filtered_df['Second Cards'].sum() if not filtered_df.empty else 0
+                        total_year1 = filtered_df['1 Year Cards'].sum() if not filtered_df.empty else 0
+                        total_year2 = filtered_df['2 Years Cards'].sum() if not filtered_df.empty else 0
+                        total_year3 = filtered_df['3 Years Cards'].sum() if not filtered_df.empty else 0
+                        avg_achievement = filtered_df['Achievement'].mean() if not filtered_df.empty else 0
+                        days_worked = st.session_state.get('days_worked', st.session_state.days)
+                        total_daily_target = (filtered_df['Target +10%'] / st.session_state.days).sum() if not filtered_df.empty else 0
+                        expected_cards = total_daily_target * days_worked
+                        summary_balance = total_cards - expected_cards
+                        total_agents = len(filtered_df)
+                        agents_above_target = len(filtered_df[filtered_df['Achievement'] >= 100]) if not filtered_df.empty else 0
+
+                        body = f"""Dear Manager,
 
 Please find attached the summary sales report from {st.session_state.start_date} to {st.session_state.end_date} based on {st.session_state.date_type}.
 
@@ -1496,13 +1557,16 @@ Summary Report Statistics:
 - Total 2-Year Cards: {int(total_year2)}
 - Total 3-Year Cards: {int(total_year3)}
 - Average Achievement: {int(avg_achievement)}%
+- Total Agents: {total_agents}
+- Agents Above Target (100%+): {agents_above_target}
+- Agents Below Target: {total_agents - agents_above_target}
 - Daily Performance ({days_worked} days): Expected {int(expected_cards)} cards, Actual {int(total_cards)} cards
 - Overall Balance: {int(summary_balance)} ({'Positive' if summary_balance >= 0 else 'Negative'})
 
 Best regards,
 Sales Team"""
 
-                        cc_list = [email.strip() for email in additional_cc.split(',') if email.strip()] if additional_cc else None
+                        cc_list = [email.strip() for email in additional_cc.split(',') if email.strip() and '@' in email.strip()] if additional_cc else []
 
                         if send_email(
                             st.session_state.sender_email,
@@ -1514,11 +1578,11 @@ Sales Team"""
                             pdf_path.name,
                             cc_list
                         ):
-                            st.success(f"Summary report sent successfully to {summary_recipient}!")
+                            st.success(f"✅ Summary report sent successfully to {summary_recipient}!")
                         else:
-                            st.error("Failed to send summary report.")
+                            st.error("❌ Failed to send summary report.")
                     else:
-                        st.error("Failed to generate summary report.")
+                        st.error("❌ Failed to generate summary report.")
 
 # Tab 4: Instructions
 with tab4:
@@ -1591,54 +1655,36 @@ with tab4:
     - 2-Year Target: 39
     - 3-Year Target: 13
 
-    #### 3. Daily Target Performance
-
-    - Set "Number of Days Worked" in the sidebar
-    - Click "Calculate Daily Performance" button
-    - The system will calculate expected cards based on daily target
-    - Shows if agent is ahead or behind schedule
-
-    #### 4. Steps to Generate Reports
+    #### 3. Steps to Generate Reports
 
     1. **Upload Files** - Use the sidebar to upload Sales, Target, and Email files
     2. **Configure Settings** - Set date range, email credentials, and sorting options
-    3. **Set Days Worked** - Enter number of days worked and calculate performance
-    4. **Refresh Results** - Click "Refresh Results" to view data in the Results tab
-    5. **Generate Reports** - Use the Generate Reports tab to create PDF reports
-    6. **Send Emails** - Configure email settings and send reports to agents/managers
+    3. **Refresh Results** - Click "Refresh Results" to view data in the Results tab
+    4. **Generate Reports** - Use the Generate Reports tab to create PDF reports
+    5. **Send Emails** - Use the Send Emails tab to send reports
 
-    #### 5. Report Types
+    #### 4. Email Types
 
-    - **Individual Reports** - One PDF per agent (single page) with personal performance including progress bars
-    - **Summary Report** - Combined report showing all agents with team totals
-    - **Team Reports** - Manager-specific reports showing their team's performance
+    - **Send to Agents** - Send individual reports to specific agents or all agents
+    - **Send to Managers** - Send team reports to team leaders
+    - **Send Summary Report** - Send consolidated report to company manager
 
-    #### 6. Goal Status Section (appears in PDF below chart)
-
-    Each PDF report includes:
-    - **2-Year Cards Status** - Shows actual vs target, and remaining cards needed
-    - **3-Year Cards Status** - Shows actual vs target, and remaining cards needed
-    - **Daily Performance** - Shows expected vs actual cards based on days worked
-    - **Balance Status** - Positive/Negative balance indicator
-    - **Colored Progress Bars** - Green (Good), Yellow (Average), Red (Needs Improvement)
-
-    #### 7. Email Configuration
+    #### 5. Email Configuration
 
     For Gmail:
-    - Enable "Less secure app access" or use App Password
+    - Use App Password (recommended) or enable "Less secure app access"
     - SMTP Server: smtp.gmail.com
     - Port: 587
 
-    #### 8. Important Notes
+    #### 6. Important Notes
 
-    - The 2-Year and 3-Year targets are calculated based on **BASIC TARGET** (from Target file)
-    - Special agents (201108, 201171, 250211) have fixed targets regardless of their basic target
-    - Each agent report is designed to fit on ONE PAGE only
-    - The achievement percentage is calculated as: (Total Cards / Basic Target) * 100
-    - Daily performance compares actual cards vs expected cards based on days worked
+    - All email addresses are validated before sending
+    - CC emails can be added (comma-separated)
+    - Reports are generated automatically before sending
+    - Achievement filter can be used to send reports only to high-performing agents
     """)
 
-    st.info("Note: For best results, ensure all Excel files follow the required column structure. The 2Y and 3Y targets are calculated based on basic target, then compared against actual 2Y and 3Y card counts. Daily performance shows if agents are on track.")
+    st.info("💡 Tip: Use the achievement filter to send reports only to agents who meet minimum performance criteria.")
 
 # Initialize results on first load
 if st.session_state.results_df.empty and st.session_state.sales_file is not None:
