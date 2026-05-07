@@ -1279,17 +1279,40 @@ with tab3:
                 if not st.session_state.results_df.empty:
                     agent_names = ["All"] + sorted(st.session_state.results_df['Agent Name'].tolist())
                     selected_agent = st.selectbox("Select Agent", agent_names)
+                    
+                    send_to = st.radio(
+                        "Send report to:",
+                        ["The Agent", "Agent's Manager"],
+                        horizontal=True
+                    )
                 else:
                     st.warning("Please refresh results first.")
                     selected_agent = "All"
+                    send_to = "The Agent"
 
             elif email_type == "Team Leaders":
-                if 'Manager Email' in email_df.columns:
-                    manager_names = ["All"] + sorted(email_df['Manager Email'].dropna().unique().tolist())
-                    selected_manager = st.selectbox("Select Team Leader", manager_names)
-                else:
+                # التحقق من وجود أعمدة المدير والفريق
+                if 'Manager Email' not in email_df.columns:
                     st.error("Email file must contain 'Manager Email' column.")
-                    selected_manager = "All"
+                else:
+                    # استخراج الفرق المتاحة
+                    if 'Team Name' in email_df.columns:
+                        team_names = ["All"] + sorted(email_df['Team Name'].dropna().unique().tolist())
+                        selected_team = st.selectbox("Select Team Name", team_names)
+                        
+                        # بناء خريطة المديرين بناءً على الفريق المختار
+                        if selected_team == "All":
+                            manager_names = ["All"] + sorted(email_df['Manager Email'].dropna().unique().tolist())
+                        else:
+                            team_managers = email_df[email_df['Team Name'] == selected_team]['Manager Email'].dropna().unique().tolist()
+                            manager_names = ["All"] + sorted(team_managers)
+                        
+                        selected_manager = st.selectbox("Select Team Leader", manager_names)
+                    else:
+                        st.warning("No 'Team Name' column found. Using managers only.")
+                        manager_names = ["All"] + sorted(email_df['Manager Email'].dropna().unique().tolist())
+                        selected_manager = st.selectbox("Select Team Leader", manager_names)
+                        selected_team = "All"
 
     with col2:
         if email_type == "Company Manager Summary":
@@ -1311,216 +1334,289 @@ with tab3:
         email_str = str(email).strip()
         return '@' in email_str and '.' in email_str
 
-    def is_valid_agent_email(agent_code, email_df):
-        if agent_code not in email_df['Agent Code'].values:
-            return False
-        email = email_df[email_df['Agent Code'] == agent_code]['Email'].values[0]
-        return is_valid_email(email)
+    # ==================== دوال المعاينة ====================
+    def preview_individual_report(agent_name):
+        """معاينة تقرير السيلز الفردي"""
+        agent_row = st.session_state.results_df[st.session_state.results_df['Agent Name'] == agent_name]
+        if agent_row.empty:
+            st.error(f"Agent '{agent_name}' not found")
+            return None
+        
+        agent_code = agent_row.iloc[0]['Agent Code']
+        output_dir = Path(tempfile.gettempdir()) / "PDF_Reports"
+        pdf_path = output_dir / f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf"
+        
+        if pdf_path.exists():
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            return pdf_bytes
+        else:
+            st.error(f"PDF not found for {agent_name}. Please generate reports first.")
+            return None
 
-    def is_valid_manager_email(manager_email, email_df):
-        if manager_email not in email_df['Manager Email'].values:
-            return False
-        return is_valid_email(manager_email)
+    def preview_team_report(manager_email, team_agents):
+        """معاينة تقرير الفريق"""
+        if not team_agents:
+            st.error(f"No agents found for this team")
+            return None
+        
+        sales_df = pd.read_excel(st.session_state.sales_file)
+        target_df = pd.read_excel(st.session_state.target_file)
+        sales_df[st.session_state.date_type] = pd.to_datetime(sales_df[st.session_state.date_type], format='%d/%m/%Y', errors='coerce').dt.date
+        date_range_sales = sales_df[(sales_df[st.session_state.date_type] >= st.session_state.start_date) & 
+                                    (sales_df[st.session_state.date_type] <= st.session_state.end_date)]
+        
+        pdf_path = generate_team_report(
+            manager_email, team_agents, date_range_sales, target_df,
+            st.session_state.start_date, st.session_state.end_date
+        )
+        
+        if pdf_path and pdf_path.exists():
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            return pdf_bytes
+        else:
+            st.error(f"Failed to generate team report")
+            return None
 
-    col1, col2, col3 = st.columns(3)
+    def preview_summary_report():
+        """معاينة التقرير المجمع"""
+        pdf_path = generate_summary_report()
+        if pdf_path and pdf_path.exists():
+            with open(pdf_path, "rb") as f:
+                pdf_bytes = f.read()
+            return pdf_bytes
+        else:
+            st.error("Failed to generate summary report")
+            return None
 
-    # ==================== 1. إرسال للسيلز ====================
-    with col1:
-        if st.button("Send to Agents", use_container_width=True, type="primary"):
-            if email_type != "Individual Agents":
-                st.error("Please select 'Individual Agents' email type first.")
-            elif not st.session_state.sender_email or not st.session_state.email_password:
-                st.error("Configure sender email and password in sidebar.")
-            elif st.session_state.email_file is None:
-                st.error("Upload email list file.")
-            else:
-                with st.spinner("Sending emails to agents..."):
-                    email_df = pd.read_excel(st.session_state.email_file)
-                    agent_emails = email_df.set_index('Agent Code')['Email'].to_dict()
-                    output_dir = Path(tempfile.gettempdir()) / "PDF_Reports"
-                    successful = 0
-                    failed = 0
-                    skipped = 0
-                    errors = []
+    # ==================== أزرار المعاينة والإرسال ====================
+    
+    if email_type == "Individual Agents":
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            if st.button("👁️ Preview Report", use_container_width=True):
+                if selected_agent != "All":
+                    pdf_bytes = preview_individual_report(selected_agent)
+                    if pdf_bytes:
+                        st.download_button(
+                            label="📄 Download PDF Preview",
+                            data=pdf_bytes,
+                            file_name=f"preview_{selected_agent.replace(' ', '_')}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                else:
+                    st.warning("Please select a specific agent to preview")
+        
+        with col2:
+            if st.button("📧 Send Report", use_container_width=True, type="primary"):
+                if not st.session_state.sender_email or not st.session_state.email_password:
+                    st.error("Configure sender email and password in sidebar.")
+                elif st.session_state.email_file is None:
+                    st.error("Upload email list file.")
+                else:
+                    with st.spinner("Sending..."):
+                        email_df = pd.read_excel(st.session_state.email_file)
+                        agent_emails = email_df.set_index('Agent Code')['Email'].to_dict()
+                        
+                        manager_map = {}
+                        for _, row in email_df.iterrows():
+                            agent_code = str(row['Agent Code'])
+                            manager = row.get('Manager Email', None)
+                            if pd.notna(manager):
+                                manager_map[agent_code] = manager
+                        
+                        output_dir = Path(tempfile.gettempdir()) / "PDF_Reports"
+                        filtered_df = st.session_state.results_df
+                        if achievement_filter > 0:
+                            filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
+                        
+                        if selected_agent == "All":
+                            agents_to_send = filtered_df['Agent Name'].tolist()
+                        else:
+                            agents_to_send = [selected_agent]
+                        
+                        cc_list = [email.strip() for email in additional_cc.split(',') if is_valid_email(email.strip())] if additional_cc else []
+                        
+                        successful = 0
+                        failed = 0
+                        
+                        for agent_name in agents_to_send:
+                            agent_row = filtered_df[filtered_df['Agent Name'] == agent_name]
+                            if agent_row.empty:
+                                failed += 1
+                                continue
+                            
+                            agent_code = agent_row.iloc[0]['Agent Code']
+                            
+                            if send_to == "The Agent":
+                                recipient_email = agent_emails.get(agent_code)
+                            else:
+                                recipient_email = manager_map.get(agent_code)
+                            
+                            if not is_valid_email(recipient_email):
+                                failed += 1
+                                continue
+                            
+                            pdf_path = output_dir / f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf"
+                            if not pdf_path.exists():
+                                failed += 1
+                                continue
+                            
+                            total_cards = agent_row.iloc[0]['Total Cards']
+                            achievement = agent_row.iloc[0]['Achievement']
+                            
+                            body = f"""Dear {recipient_email.split('@')[0]},
 
-                    filtered_df = st.session_state.results_df
-                    if achievement_filter > 0:
-                        filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
+Attached is the sales report for {agent_name}.
 
-                    # تحديد السيلز المختارين
-                    if selected_agent == "All":
-                        agents_to_send = filtered_df['Agent Name'].tolist()
-                    else:
-                        agents_to_send = [selected_agent]
-
-                    cc_list = [email.strip() for email in additional_cc.split(',') if is_valid_email(email.strip())] if additional_cc else []
-
-                    for agent_name in agents_to_send:
-                        agent_row = filtered_df[filtered_df['Agent Name'] == agent_name]
-                        if agent_row.empty:
-                            skipped += 1
-                            continue
-
-                        agent_code = agent_row.iloc[0]['Agent Code']
-                        recipient_email = agent_emails.get(agent_code)
-
-                        if not is_valid_email(recipient_email):
-                            errors.append(f"No valid email for: {agent_name}")
-                            failed += 1
-                            continue
-
-                        pdf_path = output_dir / f"{agent_code}_report_{st.session_state.date_type.replace(' ', '_')}.pdf"
-                        if not pdf_path.exists():
-                            errors.append(f"PDF not found for: {agent_name}")
-                            failed += 1
-                            continue
-
-                        total_cards = agent_row.iloc[0]['Total Cards']
-                        achievement = agent_row.iloc[0]['Achievement']
-                        year2_cards = agent_row.iloc[0]['2 Years Cards']
-                        year3_cards = agent_row.iloc[0]['3 Years Cards']
-                        target_2y = agent_row.iloc[0].get('Target 2Y', 0)
-                        target_3y = agent_row.iloc[0].get('Target 3Y', 0)
-                        days_worked = st.session_state.get('days_worked', st.session_state.days)
-                        daily_target = agent_row.iloc[0]['Target +10%'] / st.session_state.days if st.session_state.days > 0 else 0
-                        expected_cards = daily_target * days_worked
-                        balance = total_cards - expected_cards
-
-                        body = f"""Dear {agent_name},
-
-Please find attached your sales report from {st.session_state.start_date} to {st.session_state.end_date} based on {st.session_state.date_type}.
-
-Summary:
-- Total Cards Sold: {int(total_cards)}
-- Achievement: {int(achievement)}%
-- 2-Year Cards: {int(year2_cards)} / Target: {int(target_2y)}
-- 3-Year Cards: {int(year3_cards)} / Target: {int(target_3y)}
-- Daily Performance ({days_worked} days): Expected {int(expected_cards)} cards, Actual {int(total_cards)} cards
-- Balance: {int(balance)} ({'Positive' if balance >= 0 else 'Negative'})
+Period: {st.session_state.start_date} to {st.session_state.end_date}
+Total Cards: {int(total_cards)}
+Achievement: {int(achievement)}%
 
 Best regards,
 Sales Team"""
+                            
+                            if send_email(
+                                st.session_state.sender_email,
+                                st.session_state.email_password,
+                                recipient_email,
+                                pdf_path,
+                                f"Sales Report: {agent_name}",
+                                body,
+                                pdf_path.name,
+                                cc_list
+                            ):
+                                successful += 1
+                            else:
+                                failed += 1
+                        
+                        st.success(f"✅ Sent: {successful} | ❌ Failed: {failed}")
 
-                        if send_email(
-                            st.session_state.sender_email,
-                            st.session_state.email_password,
-                            recipient_email,
-                            pdf_path,
-                            f"Individual Report: {st.session_state.email_subject}",
-                            body,
-                            pdf_path.name,
-                            cc_list
-                        ):
-                            successful += 1
-                        else:
-                            failed += 1
-                            errors.append(f"Failed to send to: {agent_name}")
-
-                    st.success(f"✅ Sent: {successful} | ❌ Failed: {failed} | ⏭️ Skipped: {skipped}")
-                    if errors:
-                        with st.expander(f"Show {len(errors)} errors"):
-                            for err in errors[:15]:
-                                st.write(f"- {err}")
-
-    # ==================== 2. إرسال للمدراء ====================
-    with col2:
-        if st.button("Send to Managers", use_container_width=True, type="primary"):
-            if email_type != "Team Leaders":
-                st.error("Please select 'Team Leaders' email type first.")
-            elif not st.session_state.sender_email or not st.session_state.email_password:
-                st.error("Configure sender email and password in sidebar.")
-            elif st.session_state.email_file is None:
-                st.error("Upload email list file.")
-            else:
-                with st.spinner("Sending emails to managers..."):
+    elif email_type == "Team Leaders":
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            if st.button("👁️ Preview Report", use_container_width=True):
+                if selected_manager != "All":
+                    # الحصول على أعضاء الفريق بناءً على التيم المختار أو المدير
                     email_df = pd.read_excel(st.session_state.email_file)
-
-                    if 'Manager Email' not in email_df.columns:
-                        st.error("Email file must contain 'Manager Email' column.")
+                    
+                    if selected_team != "All" and 'Team Name' in email_df.columns:
+                        team_agents = email_df[email_df['Team Name'] == selected_team]['Agent Code'].astype(str).tolist()
                     else:
-                        # قراءة البيانات
+                        team_agents = email_df[email_df['Manager Email'] == selected_manager]['Agent Code'].astype(str).tolist()
+                    
+                    pdf_bytes = preview_team_report(selected_manager, team_agents)
+                    if pdf_bytes:
+                        st.download_button(
+                            label="📄 Download PDF Preview",
+                            data=pdf_bytes,
+                            file_name=f"preview_team_{selected_manager.split('@')[0]}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                else:
+                    st.warning("Please select a specific team leader or team to preview")
+        
+        with col2:
+            if st.button("📧 Send Report", use_container_width=True, type="primary"):
+                if not st.session_state.sender_email or not st.session_state.email_password:
+                    st.error("Configure sender email and password in sidebar.")
+                elif st.session_state.email_file is None:
+                    st.error("Upload email list file.")
+                else:
+                    with st.spinner("Sending..."):
+                        email_df = pd.read_excel(st.session_state.email_file)
                         sales_df = pd.read_excel(st.session_state.sales_file)
                         target_df = pd.read_excel(st.session_state.target_file)
+                        
                         sales_df[st.session_state.date_type] = pd.to_datetime(sales_df[st.session_state.date_type], format='%d/%m/%Y', errors='coerce').dt.date
                         date_range_sales = sales_df[(sales_df[st.session_state.date_type] >= st.session_state.start_date) & 
                                                     (sales_df[st.session_state.date_type] <= st.session_state.end_date)]
-
-                        # بناء خريطة المدير -> الفريق
+                        
+                        # بناء خرائط الفرق والمدراء
                         team_map = {}
+                        manager_team_map = {}
+                        
                         for _, row in email_df.iterrows():
                             manager = row['Manager Email']
                             agent_code = str(row['Agent Code'])
+                            team_name = row.get('Team Name', None)
+                            
                             if pd.notna(manager) and is_valid_email(manager):
                                 if manager not in team_map:
                                     team_map[manager] = []
                                 team_map[manager].append(agent_code)
-
-                        # تحديد المدراء المختارين
-                        if selected_manager == "All":
-                            managers_to_send = list(team_map.keys())
-                        else:
+                                
+                                if pd.notna(team_name):
+                                    if team_name not in manager_team_map:
+                                        manager_team_map[team_name] = manager
+                        
+                        # تحديد المدراء المراد إرسال التقرير لهم
+                        if selected_manager != "All":
                             managers_to_send = [selected_manager]
-
+                        elif selected_team != "All" and 'Team Name' in email_df.columns:
+                            # إرسال لمدير الفريق المحدد فقط
+                            manager_for_team = manager_team_map.get(selected_team)
+                            managers_to_send = [manager_for_team] if manager_for_team else []
+                        else:
+                            managers_to_send = list(team_map.keys())
+                        
+                        cc_list = [email.strip() for email in additional_cc.split(',') if is_valid_email(email.strip())] if additional_cc else []
+                        
                         successful = 0
                         failed = 0
-                        errors = []
-                        cc_list = [email.strip() for email in additional_cc.split(',') if is_valid_email(email.strip())] if additional_cc else []
-
+                        
                         for manager_email in managers_to_send:
-                            team_agents = team_map.get(manager_email, [])
-                            if not team_agents:
-                                errors.append(f"No agents found for: {manager_email}")
+                            if not manager_email:
                                 failed += 1
                                 continue
-
-                            # تطبيق فلتر الإنجاز
+                            
+                            # الحصول على أعضاء الفريق
+                            if selected_team != "All" and 'Team Name' in email_df.columns:
+                                team_agents = email_df[email_df['Team Name'] == selected_team]['Agent Code'].astype(str).tolist()
+                            else:
+                                team_agents = team_map.get(manager_email, [])
+                            
+                            if not team_agents:
+                                failed += 1
+                                continue
+                            
                             filtered_df = st.session_state.results_df
                             if achievement_filter > 0:
                                 filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
-
+                            
                             valid_agents = [a for a in team_agents if a in filtered_df['Agent Code'].values]
                             if not valid_agents:
-                                errors.append(f"No agents match achievement filter for: {manager_email}")
                                 failed += 1
                                 continue
-
-                            # إنشاء تقرير الفريق
+                            
                             pdf_path = generate_team_report(
                                 manager_email, valid_agents, date_range_sales, target_df,
                                 st.session_state.start_date, st.session_state.end_date
                             )
-
+                            
                             if not pdf_path:
-                                errors.append(f"Failed to generate report for: {manager_email}")
                                 failed += 1
                                 continue
-
+                            
                             team_data = filtered_df[filtered_df['Agent Code'].isin(valid_agents)]
                             total_cards = team_data['Total Cards'].sum() if not team_data.empty else 0
-                            total_year2 = team_data['2 Years Cards'].sum() if not team_data.empty else 0
-                            total_year3 = team_data['3 Years Cards'].sum() if not team_data.empty else 0
-                            days_worked = st.session_state.get('days_worked', st.session_state.days)
-                            daily_target_team = (team_data['Target +10%'] / st.session_state.days).sum() if not team_data.empty else 0
-                            expected = daily_target_team * days_worked
-                            balance = total_cards - expected
-
+                            
                             body = f"""Dear Team Leader,
 
-Team sales report attached.
+Attached is your team's sales report.
 
 Period: {st.session_state.start_date} to {st.session_state.end_date}
-Date Type: {st.session_state.date_type}
-
-Team Summary:
-- Total Cards: {int(total_cards)}
-- 2-Year Cards: {int(total_year2)}
-- 3-Year Cards: {int(total_year3)}
-- Daily Performance ({days_worked} days): Expected {int(expected)}, Actual {int(total_cards)}
-- Balance: {int(balance)} ({'Ahead' if balance >= 0 else 'Behind'})
+Team: {selected_team if selected_team != 'All' else 'All Teams'}
+Team Total Cards: {int(total_cards)}
 
 Best regards,
 Sales Team"""
-
+                            
                             if send_email(
                                 st.session_state.sender_email,
                                 st.session_state.email_password,
@@ -1534,83 +1630,70 @@ Sales Team"""
                                 successful += 1
                             else:
                                 failed += 1
-                                errors.append(f"Failed to send to: {manager_email}")
-
+                        
                         st.success(f"✅ Sent to managers: {successful} | ❌ Failed: {failed}")
-                        if errors:
-                            with st.expander(f"Show {len(errors)} errors"):
-                                for err in errors[:15]:
-                                    st.write(f"- {err}")
 
-    # ==================== 3. إرسال التقرير المجمع ====================
-    with col3:
-        if st.button("Send Summary Report", use_container_width=True, type="primary"):
-            if email_type != "Company Manager Summary":
-                st.error("Please select 'Company Manager Summary' email type first.")
-            elif not st.session_state.sender_email or not st.session_state.email_password:
-                st.error("Configure sender email and password in sidebar.")
-            elif not summary_recipient or not is_valid_email(summary_recipient):
-                st.error("Enter valid company manager email.")
-            else:
-                with st.spinner("Generating and sending summary report..."):
-                    pdf_path = generate_summary_report()
+    else:  # Company Manager Summary
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            if st.button("👁️ Preview Report", use_container_width=True):
+                pdf_bytes = preview_summary_report()
+                if pdf_bytes:
+                    st.download_button(
+                        label="📄 Download PDF Preview",
+                        data=pdf_bytes,
+                        file_name="preview_summary_report.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
+        
+        with col2:
+            if st.button("📧 Send Report", use_container_width=True, type="primary"):
+                if not st.session_state.sender_email or not st.session_state.email_password:
+                    st.error("Configure sender email and password in sidebar.")
+                elif not summary_recipient or not is_valid_email(summary_recipient):
+                    st.error("Enter valid company manager email.")
+                else:
+                    with st.spinner("Generating and sending..."):
+                        pdf_path = generate_summary_report()
+                        
+                        if pdf_path:
+                            filtered_df = st.session_state.results_df
+                            if achievement_filter > 0:
+                                filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
+                            
+                            total_cards = filtered_df['Total Cards'].sum() if not filtered_df.empty else 0
+                            avg_achievement = filtered_df['Achievement'].mean() if not filtered_df.empty else 0
+                            
+                            body = f"""Dear Manager,
 
-                    if pdf_path:
-                        filtered_df = st.session_state.results_df
-                        if achievement_filter > 0:
-                            filtered_df = filtered_df[filtered_df['Achievement'] >= achievement_filter]
-
-                        total_cards = filtered_df['Total Cards'].sum() if not filtered_df.empty else 0
-                        total_second = filtered_df['Second Cards'].sum() if not filtered_df.empty else 0
-                        total_year1 = filtered_df['1 Year Cards'].sum() if not filtered_df.empty else 0
-                        total_year2 = filtered_df['2 Years Cards'].sum() if not filtered_df.empty else 0
-                        total_year3 = filtered_df['3 Years Cards'].sum() if not filtered_df.empty else 0
-                        avg_achievement = filtered_df['Achievement'].mean() if not filtered_df.empty else 0
-                        days_worked = st.session_state.get('days_worked', st.session_state.days)
-                        total_daily_target = (filtered_df['Target +10%'] / st.session_state.days).sum() if not filtered_df.empty else 0
-                        expected = total_daily_target * days_worked
-                        balance = total_cards - expected
-                        total_agents = len(filtered_df)
-                        agents_above = len(filtered_df[filtered_df['Achievement'] >= 100]) if not filtered_df.empty else 0
-
-                        body = f"""Dear Manager,
-
-Summary sales report attached.
+Attached is the summary sales report.
 
 Period: {st.session_state.start_date} to {st.session_state.end_date}
-Date Type: {st.session_state.date_type}
-
-Statistics:
-- Total Cards: {int(total_cards)}
-- Second Cards: {int(total_second)}
-- 1-Year Cards: {int(total_year1)}
-- 2-Year Cards: {int(total_year2)}
-- 3-Year Cards: {int(total_year3)}
-- Average Achievement: {int(avg_achievement)}%
-- Agents: {total_agents} (Above Target: {agents_above}, Below: {total_agents - agents_above})
-- Daily Performance ({days_worked} days): Expected {int(expected)}, Actual {int(total_cards)}
-- Balance: {int(balance)} ({'Positive' if balance >= 0 else 'Negative'})
+Total Cards: {int(total_cards)}
+Average Achievement: {int(avg_achievement)}%
 
 Best regards,
 Sales Team"""
-
-                        cc_list = [email.strip() for email in additional_cc.split(',') if is_valid_email(email.strip())] if additional_cc else []
-
-                        if send_email(
-                            st.session_state.sender_email,
-                            st.session_state.email_password,
-                            summary_recipient,
-                            pdf_path,
-                            f"Summary Report: {st.session_state.email_subject}",
-                            body,
-                            pdf_path.name,
-                            cc_list
-                        ):
-                            st.success(f"✅ Summary report sent to {summary_recipient}")
+                            
+                            cc_list = [email.strip() for email in additional_cc.split(',') if is_valid_email(email.strip())] if additional_cc else []
+                            
+                            if send_email(
+                                st.session_state.sender_email,
+                                st.session_state.email_password,
+                                summary_recipient,
+                                pdf_path,
+                                f"Summary Report: {st.session_state.email_subject}",
+                                body,
+                                pdf_path.name,
+                                cc_list
+                            ):
+                                st.success(f"✅ Summary report sent to {summary_recipient}")
+                            else:
+                                st.error("❌ Failed to send summary report")
                         else:
-                            st.error("❌ Failed to send summary report")
-                    else:
-                        st.error("❌ Failed to generate summary report")
+                            st.error("❌ Failed to generate summary report")
 
 # Tab 4: Instructions
 with tab4:
