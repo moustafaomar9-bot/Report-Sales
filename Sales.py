@@ -1259,6 +1259,69 @@ with tab2:
 with tab3:
     st.header("Send Emails")
 
+    # ==================== قراءة ملف الإيميلات بغض النظر عن ترتيب الأعمدة ====================
+    if st.session_state.email_file is not None:
+        email_df = pd.read_excel(st.session_state.email_file)
+        
+        # إعادة تسمية الأعمدة للتأكد من الأسماء الصحيحة
+        # البحث عن عمود Agent Code
+        agent_code_col = None
+        for col in email_df.columns:
+            if 'Agent Code' in col or 'agent code' in col.lower() or 'code' in col.lower():
+                agent_code_col = col
+                break
+        
+        # البحث عن عمود Email
+        email_col = None
+        for col in email_df.columns:
+            if 'Email' in col or 'email' in col.lower() or 'e-mail' in col.lower():
+                email_col = col
+                break
+        
+        # البحث عن عمود Manager Email
+        manager_col = None
+        for col in email_df.columns:
+            if 'Manager' in col or 'manager email' in col.lower():
+                manager_col = col
+                break
+        
+        # البحث عن عمود Agent Name
+        name_col = None
+        for col in email_df.columns:
+            if 'Agent Name' in col or 'agent name' in col.lower() or 'name' in col.lower():
+                name_col = col
+                break
+        
+        # البحث عن عمود Team Name (اختياري)
+        team_col = None
+        for col in email_df.columns:
+            if 'Team Name' in col or 'team name' in col.lower() or 'team' in col.lower():
+                team_col = col
+                break
+        
+        # إعادة تسمية الأعمدة إلى الأسماء القياسية
+        if agent_code_col:
+            email_df = email_df.rename(columns={agent_code_col: 'Agent Code'})
+        if email_col:
+            email_df = email_df.rename(columns={email_col: 'Email'})
+        if manager_col:
+            email_df = email_df.rename(columns={manager_col: 'Manager Email'})
+        if name_col:
+            email_df = email_df.rename(columns={name_col: 'Agent Name'})
+        if team_col:
+            email_df = email_df.rename(columns={team_col: 'Team Name'})
+        
+        # حفظ DataFrame المعدل في session state
+        st.session_state.email_df_clean = email_df
+        
+        st.success(f"✅ تم التعرف على الأعمدة: Agent Code, Email, Manager Email, Agent Name")
+        
+        # عرض معاينة سريعة
+        with st.expander("📊 معاينة ملف الإيميلات بعد المعالجة"):
+            st.dataframe(email_df[['Agent Code', 'Agent Name', 'Email', 'Manager Email']].head(10))
+    else:
+        email_df = None
+
     # نوع الإرسال العام
     email_type = st.radio(
         "Select Email Type",
@@ -1272,20 +1335,9 @@ with tab3:
         achievement_filter = st.number_input("Minimum Achievement % (Optional)", min_value=0, max_value=100, value=0)
         additional_cc = st.text_input("Additional CC Emails (comma-separated)")
 
-        if st.session_state.email_file is not None:
-            email_df = pd.read_excel(st.session_state.email_file)
-            
-            # تحديد عمود الإيميل تلقائياً
-            email_column = None
-            for col in ['Email', 'email', 'E-mail', 'Email Address', 'EMAIL']:
-                if col in email_df.columns:
-                    email_column = col
-                    break
-            
-            if email_column:
-                st.success(f"✅ Found email column: '{email_column}'")
-            else:
-                st.error("❌ No email column found! Please add a column named 'Email'")
+        if email_df is not None:
+            # تحديد عمود الإيميل (بعد إعادة التسمية أصبح 'Email')
+            email_column = 'Email'
 
             if email_type == "Individual Agents":
                 if not st.session_state.results_df.empty:
@@ -1348,11 +1400,10 @@ with tab3:
         return '@' in email_str and '.' in email_str
 
     # ==================== قسم التحقق من صحة الإيميلات ====================
-    if st.session_state.email_file is not None and not st.session_state.results_df.empty:
+    if email_df is not None and not st.session_state.results_df.empty:
         with st.expander("🔍 Check Email Configuration", expanded=False):
-            st.subheader("📊 Email File Preview")
-            email_df = pd.read_excel(st.session_state.email_file)
-            st.dataframe(email_df.head(10))
+            st.subheader("📊 Email File Preview (After Processing)")
+            st.dataframe(email_df[['Agent Code', 'Agent Name', 'Email', 'Manager Email']].head(10))
             
             st.subheader("🔗 Agent Codes Matching")
             sales_codes = set(st.session_state.results_df['Agent Code'].astype(str))
@@ -1365,12 +1416,13 @@ with tab3:
                 st.success(f"✅ All {len(sales_codes)} agent codes matched!")
             
             st.subheader("📧 Email Coverage")
-            valid_emails = email_df[email_df[email_column].notna() & (email_df[email_column].str.contains('@', na=False))] if email_column else pd.DataFrame()
+            valid_emails = email_df[email_df['Email'].notna() & (email_df['Email'].str.contains('@', na=False))]
             st.info(f"✅ {len(valid_emails)} agents have valid emails out of {len(email_df)}")
             
             if len(valid_emails) < len(email_df):
-                missing_emails = email_df[email_df[email_column].isna() | ~email_df[email_column].str.contains('@', na=False)] if email_column else pd.DataFrame()
+                missing_emails = email_df[email_df['Email'].isna() | ~email_df['Email'].str.contains('@', na=False)]
                 st.warning(f"⚠️ {len(missing_emails)} agents missing valid emails")
+                st.dataframe(missing_emails[['Agent Code', 'Agent Name', 'Email']].head(5))
 
     # ==================== دوال المعاينة ====================
     def preview_individual_report(agent_name):
@@ -1452,24 +1504,11 @@ with tab3:
             if st.button("📧 Send Report", use_container_width=True, type="primary"):
                 if not st.session_state.sender_email or not st.session_state.email_password:
                     st.error("Configure sender email and password in sidebar.")
-                elif st.session_state.email_file is None:
+                elif email_df is None:
                     st.error("Upload email list file.")
                 else:
                     with st.spinner("Sending emails..."):
-                        email_df = pd.read_excel(st.session_state.email_file)
-                        
-                        # تحديد عمود الإيميل
-                        email_col = None
-                        for col in ['Email', 'email', 'E-mail', 'Email Address', 'EMAIL']:
-                            if col in email_df.columns:
-                                email_col = col
-                                break
-                        
-                        if not email_col:
-                            st.error("No email column found in email file!")
-                            st.stop()
-                        
-                        agent_emails = email_df.set_index('Agent Code')[email_col].to_dict()
+                        agent_emails = email_df.set_index('Agent Code')['Email'].to_dict()
                         
                         # خريطة المديرين
                         manager_map = {}
@@ -1580,8 +1619,6 @@ Sales Team"""
         with col1:
             if st.button("👁️ Preview Report", use_container_width=True):
                 if selected_manager != "All":
-                    email_df = pd.read_excel(st.session_state.email_file)
-                    
                     if selected_team != "All" and 'Team Name' in email_df.columns:
                         team_agents = email_df[email_df['Team Name'] == selected_team]['Agent Code'].astype(str).tolist()
                     else:
@@ -1603,11 +1640,10 @@ Sales Team"""
             if st.button("📧 Send Report", use_container_width=True, type="primary"):
                 if not st.session_state.sender_email or not st.session_state.email_password:
                     st.error("Configure sender email and password in sidebar.")
-                elif st.session_state.email_file is None:
+                elif email_df is None:
                     st.error("Upload email list file.")
                 else:
                     with st.spinner("Sending emails..."):
-                        email_df = pd.read_excel(st.session_state.email_file)
                         sales_df = pd.read_excel(st.session_state.sales_file)
                         target_df = pd.read_excel(st.session_state.target_file)
                         
