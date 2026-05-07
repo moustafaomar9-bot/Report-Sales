@@ -1,6 +1,6 @@
-pandas
 streamlit
-gspread
-gspread-dataframe
+pandas
+fpdf
+matplotlib
 openpyxl
-xlsxwriter
+tkcalendar
