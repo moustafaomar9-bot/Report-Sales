@@ -1,6 +1,0 @@
-pandas
-streamlit
-gspread
-gspread-dataframe
-openpyxl
-xlsxwriter
