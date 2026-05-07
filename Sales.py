@@ -1289,18 +1289,6 @@ with tab3:
 
     col1, col2, col3 = st.columns(3)
 
-        def is_valid_recipient(email, email_df, recipient_type='agent'):
-        if not email or pd.isna(email):
-            return False
-        email_str = str(email).strip()
-        if '@' not in email_str:
-            return False
-        if recipient_type == 'agent':
-            return email_str in email_df['Email'].values
-        elif recipient_type == 'manager':
-            return email_str in email_df['Manager Email'].values
-        return True
-
     with col1:
         if st.button("Send to Agents", use_container_width=True):
             if not st.session_state.sender_email or not st.session_state.email_password:
@@ -1327,6 +1315,18 @@ with tab3:
                         agents_to_send = [selected_agent]
 
                     cc_list = [email.strip() for email in additional_cc.split(',') if email.strip() and '@' in email.strip()] if additional_cc else []
+
+                    def is_valid_recipient(email, email_df, recipient_type='agent'):
+                        if not email or pd.isna(email):
+                            return False
+                        email_str = str(email).strip()
+                        if '@' not in email_str:
+                            return False
+                        if recipient_type == 'agent':
+                            return email_str in email_df['Email'].values
+                        elif recipient_type == 'manager':
+                            return email_str in email_df['Manager Email'].values
+                        return True
 
                     for agent_name in agents_to_send:
                         agent_row = filtered_df[filtered_df['Agent Name'] == agent_name]
@@ -1439,8 +1439,16 @@ Sales Team"""
                         errors = []
                         cc_list = [email.strip() for email in additional_cc.split(',') if email.strip() and '@' in email.strip()] if additional_cc else []
 
+                        def is_valid_recipient_manager(email, email_df):
+                            if not email or pd.isna(email):
+                                return False
+                            email_str = str(email).strip()
+                            if '@' not in email_str:
+                                return False
+                            return email_str in email_df['Manager Email'].values
+
                         for manager_email in managers_to_send:
-                            if not is_valid_recipient(manager_email, email_df, 'manager'):
+                            if not is_valid_recipient_manager(manager_email, email_df):
                                 errors.append(f"Invalid manager email: {manager_email}")
                                 failed += 1
                                 continue
@@ -1616,11 +1624,6 @@ with tab4:
 
     #### 2. Target Tables for 2-Year and 3-Year Cards
 
-    **How it works:**
-    - The system looks at the Agent's **BASIC TARGET** (from Target file)
-    - Based on the basic target, it determines the target for 2-Year Cards and 3-Year Cards
-    - Then it compares the target with the actual cards sold and shows the difference
-
     **2-Year Cards Target (based on BASIC TARGET):**
     | Basic Target Range | Target 2Y Cards |
     |-------------------|-----------------|
@@ -1651,40 +1654,25 @@ with tab4:
 
     **Special Agents (Fixed Targets):**
     - Agent Codes: 201108, 201171, 250211
-    - Basic Target: 300
     - 2-Year Target: 39
     - 3-Year Target: 13
 
-    #### 3. Steps to Generate Reports
+    #### 3. Steps to Use
 
-    1. **Upload Files** - Use the sidebar to upload Sales, Target, and Email files
-    2. **Configure Settings** - Set date range, email credentials, and sorting options
-    3. **Refresh Results** - Click "Refresh Results" to view data in the Results tab
-    4. **Generate Reports** - Use the Generate Reports tab to create PDF reports
-    5. **Send Emails** - Use the Send Emails tab to send reports
+    1. **Upload Files** - Sales, Target, and Email files
+    2. **Configure Settings** - Date range, email credentials
+    3. **Refresh Results** - Click to load data
+    4. **Generate Reports** - Create PDF reports
+    5. **Send Emails** - Send reports to agents, managers, or company manager
 
-    #### 4. Email Types
+    #### 4. Email Configuration for Gmail
 
-    - **Send to Agents** - Send individual reports to specific agents or all agents
-    - **Send to Managers** - Send team reports to team leaders
-    - **Send Summary Report** - Send consolidated report to company manager
-
-    #### 5. Email Configuration
-
-    For Gmail:
-    - Use App Password (recommended) or enable "Less secure app access"
+    - Use App Password (recommended)
     - SMTP Server: smtp.gmail.com
     - Port: 587
-
-    #### 6. Important Notes
-
-    - All email addresses are validated before sending
-    - CC emails can be added (comma-separated)
-    - Reports are generated automatically before sending
-    - Achievement filter can be used to send reports only to high-performing agents
     """)
 
-    st.info("💡 Tip: Use the achievement filter to send reports only to agents who meet minimum performance criteria.")
+    st.info("💡 Tip: Use achievement filter to send reports only to agents meeting minimum performance.")
 
 # Initialize results on first load
 if st.session_state.results_df.empty and st.session_state.sales_file is not None:
